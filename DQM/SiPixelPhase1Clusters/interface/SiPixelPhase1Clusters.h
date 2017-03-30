@@ -1,7 +1,7 @@
-#ifndef SiPixelPhase1Clusters_h 
-#define SiPixelPhase1Clusters_h 
+#ifndef SiPixelPhase1Clusters_h
+#define SiPixelPhase1Clusters_h
 // -*- C++ -*-
-// 
+//
 // Package:     SiPixelPhase1Clusters
 // Class  :     SiPixelPhase1Clusters
 //
@@ -15,14 +15,25 @@ class SiPixelPhase1Clusters : public SiPixelPhase1Base {
   enum {
     CHARGE,
     SIZE,
+    SIZEX,
+    SIZEY,
     NCLUSTERS,
+    NCLUSTERSINCLUSIVE,
     EVENTRATE,
     POSITION_B,
     POSITION_F,
     POSITION_XZ,
     POSITION_YZ,
-    SIZE_VS_ETA
+    SIZE_VS_ETA,
+    READOUT_CHARGE,
+    READOUT_NCLUSTERS
   };
+  // Uncomment to add trigger event flag enumerators
+  // Make sure enum corresponds correctly with flags defined in _cfi.py file
+  // enum {
+  //   FLAG_HLT,
+  //   FLAG_L1,
+  // }
 
   public:
   explicit SiPixelPhase1Clusters(const edm::ParameterSet& conf);

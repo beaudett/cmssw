@@ -12,7 +12,7 @@ ROOT.PyConfig.IgnoreCommandLineOptions = True
 import html
 
 verbose=False
-ratioYTitle = "Ratio"
+_ratioYTitle = "Ratio"
 
 def _setStyle():
     _absoluteSize = True
@@ -625,6 +625,11 @@ class Subtract:
         ret = histoA.Clone(self._name)
         ret.SetTitle(self._title)
 
+        # Disable canExtend if it is set, otherwise setting the
+        # overflow bin will extend instead, possibly causing weird
+        # effects downstream
+        ret.SetCanExtend(False)
+
         for i in xrange(0, histoA.GetNbinsX()+2): # include under- and overflow too
             val = histoA.GetBinContent(i)-histoB.GetBinContent(i)
             ret.SetBinContent(i, val)
@@ -659,6 +664,11 @@ class Transform:
 
         ret = histo.Clone(self._name)
         ret.SetTitle(self._title)
+
+        # Disable canExtend if it is set, otherwise setting the
+        # overflow bin will extend instead, possibly causing weird
+        # effects downstream
+        ret.SetCanExtend(False)
 
         for i in xrange(0, histo.GetNbinsX()+2):
             ret.SetBinContent(i, self._func(histo.GetBinContent(i)))
@@ -1105,7 +1115,7 @@ class Frame:
 
 class FrameRatio:
     """Class for creating and managing a frame for a ratio plot with two subpads"""
-    def __init__(self, pad, bounds, ratioBounds, ratioFactor, nrows, xbinlabels=None, xbinlabelsize=None, xbinlabeloption=None):
+    def __init__(self, pad, bounds, ratioBounds, ratioFactor, nrows, xbinlabels=None, xbinlabelsize=None, xbinlabeloption=None, ratioYTitle=_ratioYTitle):
         self._parentPad = pad
         self._pad = pad.cd(1)
         if xbinlabels is not None:

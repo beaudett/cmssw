@@ -1,6 +1,7 @@
 import FWCore.ParameterSet.Config as cms
 import RecoLocalCalo.HcalRecProducers.HBHEMethod3Parameters_cfi as method3
 import RecoLocalCalo.HcalRecProducers.HBHEMethod2Parameters_cfi as method2
+import RecoLocalCalo.HcalRecProducers.HBHEMethod0Parameters_cfi as method0
 import RecoLocalCalo.HcalRecProducers.HBHEPulseShapeFlagSetter_cfi as pulseShapeFlag
 import RecoLocalCalo.HcalRecProducers.HBHEStatusBitSetter_cfi as hbheStatusFlag
 
@@ -45,6 +46,7 @@ hbheprereco = cms.EDProducer(
         # Parameters for "Method 3" (non-keyword arguments have to go first)
         method3.m3Parameters,
         method2.m2Parameters,
+        method0.m0Parameters,
 
         Class = cms.string("SimpleHBHEPhase1Algo"),
 
@@ -53,22 +55,20 @@ hbheprereco = cms.EDProducer(
 
         # Parameters for "Method 0"
         firstSampleShift = cms.int32(0),
-        samplesToAdd = cms.int32(2),
-        correctForPhaseContainment = cms.bool(True),
-        correctionPhaseNS = cms.double(6.0),
 
         # Use "Method 2"?
         useM2 = cms.bool(True),
 
-        # Use "Method 3"? Change this to True when implemented.
-        useM3 = cms.bool(False)
+        # Use "Method 3"?
+        useM3 = cms.bool(True)
     ),
 
     # Reconstruction algorithm configuration data to fetch from DB, if any
     algoConfigClass = cms.string(""),
 
     # Turn rechit status bit setters on/off
-    setNegativeFlags = cms.bool(False),
+    setNegativeFlagsQIE8 = cms.bool(True),
+    setNegativeFlagsQIE11 = cms.bool(False),
     setNoiseFlagsQIE8 = cms.bool(True),
     setNoiseFlagsQIE11 = cms.bool(False),
     setPulseShapeFlagsQIE8 = cms.bool(True),

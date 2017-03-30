@@ -104,7 +104,7 @@ private:
     ModuleCallingContext const* imcc = mcc;
     while(imcc->type() == ParentContext::Type::kModule) {
       std::ostringstream iost;
-      iost << "Calling method for unscheduled module "
+      iost << "Calling method for module "
       << imcc->moduleDescription()->moduleName() << "/'"
       << imcc->moduleDescription()->moduleLabel() << "'";
       ex.addContext(iost.str());
@@ -112,7 +112,7 @@ private:
     }
     if(imcc->type() == ParentContext::Type::kInternal) {
       std::ostringstream iost;
-      iost << "Calling method for unscheduled module "
+      iost << "Calling method for module "
       << imcc->moduleDescription()->moduleName() << "/'"
       << imcc->moduleDescription()->moduleLabel() << "' (probably inside some kind of mixing module)";
       ex.addContext(iost.str());
@@ -120,24 +120,14 @@ private:
     }
     while(imcc->type() == ParentContext::Type::kModule) {
       std::ostringstream iost;
-      iost << "Calling method for unscheduled module "
+      iost << "Calling method for module "
       << imcc->moduleDescription()->moduleName() << "/'"
       << imcc->moduleDescription()->moduleLabel() << "'";
       ex.addContext(iost.str());
       imcc = imcc->moduleCallingContext();
     }
     std::ostringstream ost;
-    if (iIsEvent) {
-      ost << "Calling event method";
-    }
-    else {
-      // It should be impossible to get here, because
-      // this function only gets called when the IgnoreCompletely
-      // exception behavior is active, which can only be true
-      // for events.
-      ost << "Calling unknown function";
-    }
-    ost << " for module " << imcc->moduleDescription()->moduleName() << "/'" << imcc->moduleDescription()->moduleLabel() << "'";
+    ost << "Calling method for module " << imcc->moduleDescription()->moduleName() << "/'" << imcc->moduleDescription()->moduleLabel() << "'";
     ex.addContext(ost.str());
     
     if (imcc->type() == ParentContext::Type::kPlaceInPath) {
@@ -147,7 +137,7 @@ private:
       ex.addContext(ost.str());
     }
     ost.str("");
-    ost << "Processing ";
+    ost << "Processing Event ";
     ost << iID;
     ex.addContext(ost.str());
   }
@@ -212,6 +202,9 @@ private:
         iPrincipal.prefetchAsync(iTask,productResolverIndex, skipCurrentProcess, &moduleCallingContext_);
       }
     }
+    
+    preActionBeforeRunEventAsync(iTask,moduleCallingContext_,iPrincipal);
+    
     if(0 == iTask->decrement_ref_count()) {
       //if everything finishes before we leave this routine, we need to launch the task
       tbb::task::spawn(*iTask);

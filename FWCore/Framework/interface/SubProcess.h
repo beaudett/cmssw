@@ -34,6 +34,8 @@ namespace edm {
   class ProductRegistry;
   class PreallocationConfiguration;
   class ThinnedAssociationsHelper;
+  class SubProcessParentageHelper;
+  class WaitingTaskHolder;
 
   namespace eventsetup {
     class EventSetupsController;
@@ -45,6 +47,7 @@ namespace edm {
                std::shared_ptr<ProductRegistry const> parentProductRegistry,
                std::shared_ptr<BranchIDListHelper const> parentBranchIDListHelper,
                ThinnedAssociationsHelper const& parentThinnedAssociationsHelper,
+               SubProcessParentageHelper const& parentSubProcessParentageHelper,
                eventsetup::EventSetupsController& esController,
                ActivityRegistry& parentActReg,
                ServiceToken const& token,
@@ -69,7 +72,8 @@ namespace edm {
     void doBeginJob();
     void doEndJob();
 
-    void doEvent(EventPrincipal const& principal);
+    void doEventAsync(WaitingTaskHolder iHolder,
+                      EventPrincipal const& principal);
 
     void doBeginRun(RunPrincipal const& principal, IOVSyncValue const& ts);
 
@@ -233,7 +237,7 @@ namespace edm {
   private:
     void beginJob();
     void endJob();
-    void process(EventPrincipal const& e);
+    void processAsync(WaitingTaskHolder iHolder, EventPrincipal const& e);
     void beginRun(RunPrincipal const& r, IOVSyncValue const& ts);
     void endRun(RunPrincipal const& r, IOVSyncValue const& ts, bool cleaningUpAfterException);
     void beginLuminosityBlock(LuminosityBlockPrincipal const& lb, IOVSyncValue const& ts);
@@ -260,6 +264,7 @@ namespace edm {
     std::shared_ptr<ProductRegistry const>        preg_;
     edm::propagate_const<std::shared_ptr<BranchIDListHelper>> branchIDListHelper_;
     edm::propagate_const<std::shared_ptr<ThinnedAssociationsHelper>> thinnedAssociationsHelper_;
+    edm::propagate_const<std::shared_ptr<SubProcessParentageHelper>> subProcessParentageHelper_;
     std::unique_ptr<ExceptionToActionTable const> act_table_;
     std::shared_ptr<ProcessConfiguration const>   processConfiguration_;
     ProcessContext                                processContext_;

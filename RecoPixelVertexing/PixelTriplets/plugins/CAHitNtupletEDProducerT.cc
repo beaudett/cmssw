@@ -15,13 +15,6 @@
 
 namespace {
   void fillNtuplets(RegionsSeedingHitSets::RegionFiller& seedingHitSetsFiller,
-                    const OrderedHitTriplets& triplets) {
-    for(const auto& triplet: triplets) {
-      seedingHitSetsFiller.emplace_back(triplet[0], triplet[1], triplet[2]);
-    }
-  }
-
-  void fillNtuplets(RegionsSeedingHitSets::RegionFiller& seedingHitSetsFiller,
                     const OrderedHitSeeds& quadruplets) {
     for(const auto& quad: quadruplets) {
       seedingHitSetsFiller.emplace_back(quad[0], quad[1], quad[2], quad[3]);
@@ -86,21 +79,19 @@ void CAHitNtupletEDProducerT<T_Generator>::produce(edm::Event& iEvent, const edm
   generator_.initEvent(iEvent, iSetup);
 
   LogDebug("CAHitNtupletEDProducer") << "Creating ntuplets for " << regionDoublets.regionSize() << " regions, and " << regionDoublets.layerPairsSize() << " layer pairs";
-
-  typename T_Generator::ResultType ntuplets;
-  ntuplets.reserve(localRA_.upper());
-
+  std::vector<typename T_Generator::ResultType> ntuplets;
+  ntuplets.resize(regionDoublets.regionSize());
+  for(auto& ntuplet : ntuplets)  ntuplet.reserve(localRA_.upper()); 
+   
+  generator_.hitNtuplets(regionDoublets, ntuplets, iSetup, seedingLayerHits);
+  int index = 0;
   for(const auto& regionLayerPairs: regionDoublets) {
     const TrackingRegion& region = regionLayerPairs.region();
     auto seedingHitSetsFiller = seedingHitSets->beginRegion(&region);
 
-    LogTrace("CAHitNtupletEDProducer") << " starting region";
-
-    generator_.hitNtuplets(regionLayerPairs, ntuplets, iSetup, seedingLayerHits);
-    LogTrace("CAHitNtupletEDProducer") << "  created " << ntuplets.size() << " ntuplets";
-    fillNtuplets(seedingHitSetsFiller, ntuplets);
-
-    ntuplets.clear();
+    fillNtuplets(seedingHitSetsFiller, ntuplets[index]);
+    ntuplets[index].clear();
+    index++;
   }
   localRA_.update(seedingHitSets->size());
 

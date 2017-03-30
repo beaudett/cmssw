@@ -9,6 +9,7 @@
 #include "DataFormats/Provenance/interface/LuminosityBlockAuxiliary.h"
 #include "DataFormats/Provenance/interface/RunAuxiliary.h"
 #include "DataFormats/Provenance/interface/ThinnedAssociationsHelper.h"
+#include "DataFormats/Provenance/interface/SubProcessParentageHelper.h"
 #include "FWCore/Framework/interface/EventForOutput.h"
 #include "FWCore/Framework/interface/EventPrincipal.h"
 #include "FWCore/Framework/interface/FileBlock.h"
@@ -26,7 +27,11 @@
 #include "FWCore/ParameterSet/interface/IllegalParameters.h"
 #include "FWCore/ParameterSet/interface/ParameterSet.h"
 #include "FWCore/ServiceRegistry/interface/ActivityRegistry.h"
+#include "FWCore/Concurrency/interface/WaitingTaskHolder.h"
+#include "FWCore/Concurrency/interface/WaitingTask.h"
 #include "FWCore/Utilities/interface/ExceptionCollector.h"
+
+#include "boost/range/adaptor/reversed.hpp"
 
 #include <cassert>
 #include <string>
@@ -39,6 +44,7 @@ namespace edm {
                          std::shared_ptr<ProductRegistry const> parentProductRegistry,
                          std::shared_ptr<BranchIDListHelper const> parentBranchIDListHelper,
                          ThinnedAssociationsHelper const& parentThinnedAssociationsHelper,
+                         SubProcessParentageHelper const& parentSubProcessParentageHelper,
                          eventsetup::EventSetupsController& esController,
                          ActivityRegistry& parentActReg,
                          ServiceToken const& token,
@@ -151,6 +157,10 @@ namespace edm {
     // set the items
     act_table_ = std::move(items.act_table_);
     preg_ = items.preg();
+
+    subProcessParentageHelper_ = items.subProcessParentageHelper();
+    subProcessParentageHelper_->update(parentSubProcessParentageHelper, *parentProductRegistry);
+
     //CMS-THREADING this only works since Run/Lumis are synchronous so when principalCache asks for
     // the reducedProcessHistoryID from a full ProcessHistoryID that registry will not be in use by
     // another thread. We really need to change how this is done in the PrincipalCache.
@@ -180,6 +190,7 @@ namespace edm {
                                  preg_,
                                  branchIDListHelper(),
                                  *thinnedAssociationsHelper_,
+                                 *subProcessParentageHelper_,
                                  esController,
                                  *items.actReg_,
                                  newToken,
@@ -317,7 +328,8 @@ namespace edm {
   }
 
   void
-  SubProcess::doEvent(EventPrincipal const& ep) {
+  SubProcess::doEventAsync(WaitingTaskHolder iHolder,
+                           EventPrincipal const& ep) {
     ServiceRegistry::Operate operate(serviceToken_);
     /* BEGIN relevant bits from OutputModule::doEvent */
     if(!wantAllEvents_) {
@@ -327,36 +339,69 @@ namespace edm {
         return;
       }
     }
-    process(ep);
+    processAsync(std::move(iHolder),ep);
     /* END relevant bits from OutputModule::doEvent */
   }
 
   void
-  SubProcess::process(EventPrincipal const& principal) {
+  SubProcess::processAsync(WaitingTaskHolder iHolder,
+                           EventPrincipal const& principal) {
     EventAuxiliary aux(principal.aux());
     aux.setProcessHistoryID(principal.processHistoryID());
-
+    
     EventSelectionIDVector esids{principal.eventSelectionIDs()};
     if (principal.productRegistry().anyProductProduced() || !wantAllEvents_) {
       esids.push_back(selector_config_id_);
     }
-
+    
     EventPrincipal& ep = principalCache_.eventPrincipal(principal.streamID().value());
     auto & processHistoryRegistry = processHistoryRegistries_[principal.streamID().value()];
     processHistoryRegistry.registerProcessHistory(principal.processHistory());
     BranchListIndexes bli(principal.branchListIndexes());
     branchIDListHelper_->fixBranchListIndexes(bli);
+    bool deepCopyRetriever = false;
     ep.fillEventPrincipal(aux,
                           processHistoryRegistry,
                           std::move(esids),
                           std::move(bli),
                           *(principal.productProvenanceRetrieverPtr()),//NOTE: this transfers the per product provenance
-                          principal.reader());
+                          principal.reader(),
+                          deepCopyRetriever);
     ep.setLuminosityBlockPrincipal(principalCache_.lumiPrincipalPtr());
     propagateProducts(InEvent, principal, ep);
-    schedule_->processOneEvent(ep.streamID().value(),ep, esp_->eventSetup());
-    for_all(subProcesses_, [&ep](auto& subProcess){ subProcess.doEvent(ep); });
-    ep.clearEventPrincipal();
+    
+    WaitingTaskHolder finalizeEventTask( make_waiting_task(tbb::task::allocate_root(),
+                                                           [this,&ep,iHolder](std::exception_ptr const* iPtr) mutable
+      {
+        ep.clearEventPrincipal();
+        if(iPtr) {
+          iHolder.doneWaiting(*iPtr);
+        } else {
+          iHolder.doneWaiting(std::exception_ptr());
+        }
+      }
+                                                           )
+                                        );
+    WaitingTaskHolder afterProcessTask;
+    if(subProcesses_.empty()) {
+      afterProcessTask = std::move(finalizeEventTask);
+    } else {
+      afterProcessTask = WaitingTaskHolder(
+                                           make_waiting_task(tbb::task::allocate_root(),
+                                                             [this,&ep,finalizeEventTask] (std::exception_ptr const* iPtr) mutable{
+        if(not iPtr) {
+          for(auto& subProcess: boost::adaptors::reverse(subProcesses_)) {
+            subProcess.doEventAsync(finalizeEventTask,ep);
+          }
+        } else {
+          finalizeEventTask.doneWaiting(*iPtr);
+        }
+      })
+                                           );
+    }
+    
+    schedule_->processOneEventAsync(std::move(afterProcessTask),
+                                    ep.streamID().value(),ep, esp_->eventSetup());
   }
 
   void
