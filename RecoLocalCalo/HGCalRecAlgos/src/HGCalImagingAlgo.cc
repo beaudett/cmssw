@@ -10,43 +10,41 @@
 #include "DataFormats/CaloRecHit/interface/CaloID.h"
 
 
-// Create a vector of Hexels associated to one cluster from a collection of HGCalRecHits - this can be used 
-// directly to make the final cluster list - this method can be invoked multiple times for the same event 
-// with different input (reset should be called between events)
-void HGCalImagingAlgo::makeClusters(const HGCRecHitCollection& hits)
-{
-  //used for speedy search 
-  std::vector<std::vector<KDNode> >points(2*(maxlayer+1));
-  std::vector<KDTree> hit_kdtree(2*(maxlayer+1));
-
-  std::vector<std::array<float,2> > minpos(2*(maxlayer+1),{ {0.0f,0.0f} }),maxpos(2*(maxlayer+1),{ {0.0f,0.0f} });
-
-  //  std::vector<std::vector<Hexel> > points(2*(maxlayer+1)); //a vector of vectors of hexels, one for each layer
-  //@@EM todo: the number of layers should be obtained programmatically - the range is 1-n instead of 0-n-1...
-
-
-  if (verbosity < pINFO)
-    {
-      std::cout << "-------------------------------------------------------------" << std::endl;
-      std::cout << "HGC Imaging algorithm invoked for " << std::endl;
-      std::cout << "delta_c " << delta_c << " kappa " << kappa;
-      //      if( doSharing ) std::cout << " showerSigma " << std::sqrt(sigma2);
-      std::cout << std::endl;
-    }
-
+void HGCalImagingAlgo::populate(const HGCRecHitCollection& hits){
   //loop over all hits and create the Hexel structure, skip energies below ecut
   for (unsigned int i=0;i<hits.size();++i) {
     const HGCRecHit& hgrh = hits[i];
-    if(hgrh.energy() < ecut) continue; 
     DetId detid = hgrh.detid();
+    int layer = rhtools_.getLayerWithOffset(detid);
+    float thickness = -9999.;
+    unsigned thickIndex = -1;
+    float sigmaNoise = -9999.;
+    if(dependSensor){
+      if( layer <= 40 ) {
+	thickness = rhtools_.getSiThickness(detid);
+	if( thickness>99. && thickness<101.) thickIndex=0;
+	else if( thickness>199. && thickness<201. ) thickIndex=1;
+	else if( thickness>299. && thickness<301. ) thickIndex=2;
+	else assert( thickIndex>0 && "ERROR - silicon thickness has a nonsensical value" );
+      }
+      if( layer <= 40 ) sigmaNoise = 0.001 * fcPerEle * nonAgedNoises[thickIndex] * dEdXweights[layer] / (fcPerMip[thickIndex] * thicknessCorrection[thickIndex]);
+      else if( layer <=52 ) sigmaNoise = 0.001 * noiseMip * dEdXweights[layer];
+      if(hgrh.energy() < ecut*sigmaNoise) continue; //this sets the ZS threshold at ecut times the sigma noise for the sensor
+    }
+    if(!dependSensor && hgrh.energy() < ecut) continue;
 
-    int layer = rhtools_.getLayerWithOffset(detid)+int(HGCalDetId(detid).zside()>0)*(maxlayer+1);
-    
+
+    layer += int(HGCalDetId(detid).zside()>0)*(maxlayer+1);
+
     // determine whether this is a half-hexagon
-    bool isHalf = rhtools_.isHalfCell(detid);    
+    bool isHalf = rhtools_.isHalfCell(detid);
     const GlobalPoint position( std::move( rhtools_.getPosition( detid ) ) );
+    if(zees[layer]==0) {
+      zees[layer] = position.z();
+    }
     //here's were the KDNode is passed its dims arguments - note that these are *copied* from the Hexel
-    points[layer].emplace_back(Hexel(hgrh,detid,isHalf,&rhtools_),position.x(),position.y());
+    if(thickness<0.)thickness = 0.;
+    points[layer].emplace_back(Hexel(hgrh,detid,isHalf,sigmaNoise,thickness,&rhtools_),position.x(),position.y());
     if(points[layer].size()==0){
       minpos[layer][0] = position.x(); minpos[layer][1] = position.y();
       maxpos[layer][0] = position.x(); maxpos[layer][1] = position.y();
@@ -55,9 +53,35 @@ void HGCalImagingAlgo::makeClusters(const HGCRecHitCollection& hits)
       minpos[layer][1] = std::min((float)position.y(),minpos[layer][1]);
       maxpos[layer][0] = std::max((float)position.x(),maxpos[layer][0]);
       maxpos[layer][1] = std::max((float)position.y(),maxpos[layer][1]);
-      
+
     }
   }
+
+}
+// Create a vector of Hexels associated to one cluster from a collection of HGCalRecHits - this can be used
+// directly to make the final cluster list - this method can be invoked multiple times for the same event
+// with different input (reset should be called between events)
+void HGCalImagingAlgo::makeClusters()
+{
+  //used for speedy search
+
+  std::vector<KDTree> hit_kdtree(2*(maxlayer+1));
+
+  //  std::vector<std::array<float,2> > minpos(2*(maxlayer+1),{ {0.0f,0.0f} }),maxpos(2*(maxlayer+1),{ {0.0f,0.0f} });
+
+  //  std::vector<std::vector<Hexel> > points(2*(maxlayer+1)); //a vector of vectors of hexels, one for each layer
+  //@@EM todo: the number of layers should be obtained programmatically - the range is 1-n instead of 0-n-1...
+
+
+  /*if (verbosity < pINFO)
+    {
+      std::cout << "-------------------------------------------------------------" << std::endl;
+      std::cout << "HGC Imaging algorithm invoked for " << std::endl;
+      //std::cout << "delta_c " << delta_c << " kappa " << kappa;
+      //      if( doSharing ) std::cout << " showerSigma " << std::sqrt(sigma2);
+      std::cout << std::endl;
+    }*/
+
 
   //assign all hits in each layer to a cluster core or halo
   for (unsigned int i = 0; i <= 2*maxlayer+1; ++i) {
@@ -66,11 +90,13 @@ void HGCalImagingAlgo::makeClusters(const HGCRecHitCollection& hits)
 
     hit_kdtree[i].build(points[i],bounds);
 
-    double maxdensity = calculateLocalDensity(points[i],hit_kdtree[i]);
-    // std::cout << "layer " << i << " max density " << maxdensity 
+    int actualLayer = int(abs(i-(maxlayer+1))); //maps back from index used for KD trees to actual layer
+
+    double maxdensity = calculateLocalDensity(points[i],hit_kdtree[i], actualLayer);
+    // std::cout << "layer " << i << " max density " << maxdensity
     // 	      << " total hits " << points[i].size() << std::endl;
     calculateDistanceToHigher(points[i],hit_kdtree[i]);
-    findAndAssignClusters(points[i],hit_kdtree[i],maxdensity,bounds);
+    findAndAssignClusters(points[i],hit_kdtree[i],maxdensity,bounds,actualLayer);
     //    std::cout << "found " << nclusters << " clusters" << std::endl;
   }
   //make the cluster vector
@@ -88,14 +114,14 @@ std::vector<reco::BasicCluster> HGCalImagingAlgo::getClusters(bool doSharing){
 
       std::vector<unsigned> seeds = findLocalMaximaInCluster(current_v[i]);
       //std::cout << " sharing found " << seeds.size() << " sub-cluster seeds in cluster " << i << std::endl;
-      
+
       std::vector<std::vector<double> > fractions;
       // first pass can have noise it in
       shareEnergy(current_v[i],seeds,fractions);
 
       // reset and run second pass after vetoing seeds
       // that result in trivial clusters (less than 2 effective cells)
-      
+
 
       for( unsigned isub = 0; isub < fractions.size(); ++isub ) {
 	double effective_hits = 0.0;
@@ -112,9 +138,9 @@ std::vector<reco::BasicCluster> HGCalImagingAlgo::getClusters(bool doSharing){
 	  }
 	}
 	//std::cout << std::endl;
-	
+
 	if (verbosity < pINFO)
-	  { 
+	  {
 	    std::cout << "\t******** NEW CLUSTER (SHARING) ********" << std::endl;
 	    std::cout << "\tEff. No. of cells = " << effective_hits << std::endl;
 	    std::cout << "\t     Energy       = " << energy << std::endl;
@@ -122,12 +148,12 @@ std::vector<reco::BasicCluster> HGCalImagingAlgo::getClusters(bool doSharing){
 	    std::cout << "\t     Eta          = " << position.eta() << std::endl;
 	    std::cout << "\t*****************************" << std::endl;
 	  }
-	clusters_v.push_back(reco::BasicCluster(energy, position, caloID, thisCluster, 
+	clusters_v.push_back(reco::BasicCluster(energy, position, caloID, thisCluster,
 						algoId));
 	thisCluster.clear();
       }
     }else{
-      position = calculatePosition(current_v[i]);    
+      position = calculatePosition(current_v[i]);
       std::vector< KDNode >::iterator it;
       for (it = current_v[i].begin(); it != current_v[i].end(); it++)
 	{
@@ -135,7 +161,7 @@ std::vector<reco::BasicCluster> HGCalImagingAlgo::getClusters(bool doSharing){
 	  thisCluster.emplace_back(std::pair<DetId, float>((*it).data.detid,((*it).data.isHalo?0.:1.)));
 	};
       if (verbosity < pINFO)
-	{ 
+	{
 	  std::cout << "******** NEW CLUSTER (HGCIA) ********" << std::endl;
 	  std::cout << "Index          " << i                   << std::endl;
 	  std::cout << "No. of cells = " << current_v[i].size() << std::endl;
@@ -144,13 +170,13 @@ std::vector<reco::BasicCluster> HGCalImagingAlgo::getClusters(bool doSharing){
 	  std::cout << "     Eta        = " << position.eta() << std::endl;
 	  std::cout << "*****************************" << std::endl;
 	}
-      clusters_v.push_back(reco::BasicCluster(energy, position, caloID, thisCluster, 
+      clusters_v.push_back(reco::BasicCluster(energy, position, caloID, thisCluster,
 					      algoId));
       thisCluster.clear();
     }
   }
-  return clusters_v; 
-}  
+  return clusters_v;
+}
 
 math::XYZPoint HGCalImagingAlgo::calculatePosition(std::vector<KDNode> &v){
   float total_weight = 0.;
@@ -165,14 +191,18 @@ math::XYZPoint HGCalImagingAlgo::calculatePosition(std::vector<KDNode> &v){
       z += v[i].data.z*v[i].data.weight;
     }
   }
-  
-  return math::XYZPoint( x/total_weight, 
-			 y/total_weight, 
-			 z/total_weight );
-} 
 
-double HGCalImagingAlgo::calculateLocalDensity(std::vector<KDNode> &nd, KDTree &lp){
+  return math::XYZPoint( x/total_weight,
+			 y/total_weight,
+			 z/total_weight );
+}
+
+double HGCalImagingAlgo::calculateLocalDensity(std::vector<KDNode> &nd, KDTree &lp, const int layer){
   double maxdensity = 0.;
+  float delta_c = 9999.;
+  if( layer<=28 ) delta_c = vecDeltas[0];
+  else if( layer<=40 ) delta_c = vecDeltas[1];
+  else delta_c = vecDeltas[2];
   for(unsigned int i = 0; i < nd.size(); ++i){
     KDTreeBox search_box(nd[i].dims[0]-delta_c,nd[i].dims[0]+delta_c,
 			 nd[i].dims[1]-delta_c,nd[i].dims[1]+delta_c);
@@ -189,7 +219,7 @@ double HGCalImagingAlgo::calculateLocalDensity(std::vector<KDNode> &nd, KDTree &
 }
 
 double HGCalImagingAlgo::calculateDistanceToHigher(std::vector<KDNode> &nd, KDTree &lp){
-  
+
 
   //sort vector of Hexels by decreasing local density
   std::vector<size_t> rs = sorted_indices(nd);
@@ -198,12 +228,12 @@ double HGCalImagingAlgo::calculateDistanceToHigher(std::vector<KDNode> &nd, KDTr
   int nearestHigher = -1;
 
 
-  if(rs.size()>0) 
+  if(rs.size()>0)
     maxdensity = nd[rs[0]].data.rho;
   else
     return maxdensity; // there are no hits
   double dist2 = 2500.0;
-  //start by setting delta for the highest density hit to 
+  //start by setting delta for the highest density hit to
   //the most distant hit - this is a convention
 
   for(unsigned int j = 0; j < nd.size(); j++){
@@ -214,17 +244,17 @@ double HGCalImagingAlgo::calculateDistanceToHigher(std::vector<KDNode> &nd, KDTr
   nd[rs[0]].data.nearestHigher = nearestHigher;
 
   //now we save the largest distance as a starting point
-  
+
   const double max_dist2 = dist2;
-  
+
   for(unsigned int oi = 1; oi < nd.size(); ++oi){ // start from second-highest density
     dist2 = max_dist2;
     unsigned int i = rs[oi];
-    // we only need to check up to oi since hits 
+    // we only need to check up to oi since hits
     // are ordered by decreasing density
-    // and all points coming BEFORE oi are guaranteed to have higher rho 
+    // and all points coming BEFORE oi are guaranteed to have higher rho
     // and the ones AFTER to have lower rho
-    for(unsigned int oj = 0; oj < oi; oj++){ 
+    for(unsigned int oj = 0; oj < oi; oj++){
       unsigned int j = rs[oj];
       double tmp = distance2(nd[i].data, nd[j].data);
       if(tmp <= dist2){ //this "<=" instead of "<" addresses the (rare) case when there are only two hits
@@ -233,18 +263,22 @@ double HGCalImagingAlgo::calculateDistanceToHigher(std::vector<KDNode> &nd, KDTr
       }
     }
     nd[i].data.delta = std::sqrt(dist2);
-    nd[i].data.nearestHigher = nearestHigher; //this uses the original unsorted hitlist 
+    nd[i].data.nearestHigher = nearestHigher; //this uses the original unsorted hitlist
   }
   return maxdensity;
 }
 
-int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, double maxdensity, KDTreeBox &bounds){
+int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, double maxdensity, KDTreeBox &bounds, const int layer){
 
   //this is called once per layer...
-  //so when filling the cluster temporary vector of Hexels we resize each time by the number 
+  //so when filling the cluster temporary vector of Hexels we resize each time by the number
   //of clusters found. This is always equal to the number of cluster centers...
 
   unsigned int clusterIndex = 0;
+  float delta_c = 9999.;
+  if( layer<=28 ) delta_c = vecDeltas[0];
+  else if( layer<=40 ) delta_c = vecDeltas[1];
+  else delta_c = vecDeltas[2];
 
   std::vector<size_t> rs = sorted_indices(nd); // indices sorted by decreasing rho
   std::vector<size_t> ds = sort_by_delta(nd); // sort in decreasing distance to higher
@@ -253,9 +287,17 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
   for(unsigned int i =0; i < nd.size(); ++i){
 
     //    std::cout << " delta " << lp[ds[i]].delta << " rho " << lp[ds[i]].rho << std::endl;
-    if(nd[ds[i]].data.delta < delta_c) break; // no more cluster centers to be looked at 
-    if(nd[ds[i]].data.rho < maxdensity/kappa  /* || lp[ds[i]].rho<0.001*/) continue; 
-    //skip this as a potential cluster center because it fails the density cut
+    if(nd[ds[i]].data.delta < delta_c) break; // no more cluster centers to be looked at
+    if(dependSensor){
+
+      //float rho_c = std::min(kappa*nd[ds[i]].data.sigmaNoise,maxdensity/10.);
+      float rho_c = kappa*nd[ds[i]].data.sigmaNoise;
+
+      if(nd[ds[i]].data.rho < rho_c ) continue; // set equal to kappa times noise threshold
+    }
+    else if(nd[ds[i]].data.rho < maxdensity/kappa  /* || lp[ds[i]].rho<0.001*/)
+      continue;
+
 
     nd[ds[i]].data.clusterIndex = clusterIndex;
     if (verbosity < pINFO)
@@ -266,11 +308,11 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
     clusterIndex++;
   }
 
-  //at this point clusterIndex is equal to the number of cluster centers - if it is zero we are 
+  //at this point clusterIndex is equal to the number of cluster centers - if it is zero we are
   //done
   if(clusterIndex==0) return clusterIndex;
 
-  //assign to clusters, using the nearestHigher set from previous step (always set except 
+  //assign to clusters, using the nearestHigher set from previous step (always set except
   // for top density hit that is skipped...
   for(unsigned int oi =1; oi < nd.size(); ++oi){
     unsigned int i = rs[oi];
@@ -280,10 +322,10 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
     }
   }
 
-  //make room in the temporary cluster vector for the additional clusterIndex clusters 
+  //make room in the temporary cluster vector for the additional clusterIndex clusters
   // from this layer
   if (verbosity < pINFO)
-    { 
+    {
       std::cout << "resizing cluster vector by "<< clusterIndex << std::endl;
     }
   current_v.resize(cluster_offset+clusterIndex);
@@ -302,7 +344,7 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
 			   nd[i].dims[1]-delta_c,nd[i].dims[1]+delta_c);
       std::vector<KDNode> found;
       lp.search(search_box,found);
-	
+
       for(unsigned int j = 1; j < found.size(); j++){
 	//check if the hit is not within d_c of another cluster
 	if(found[j].data.clusterIndex!=-1){
@@ -312,7 +354,7 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
 	    nd[i].data.isBorder = true;
 	    break;
 	  }
-	  //because we are using two different containers, we have to make sure that we don't unflag the 
+	  //because we are using two different containers, we have to make sure that we don't unflag the
 	  // hit when it finds *itself* closer than delta_c
 	  if(dist < delta_c && dist != 0. && found[j].data.clusterIndex==ci){
 	    //this is not an isolated hit
@@ -321,21 +363,21 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
 	}
       }
       if(flag_isolated) nd[i].data.isBorder = true; //the hit is more than delta_c from any of its brethren
-    }	  
+    }
     //check if this border hit has density larger than the current rho_b and update
     if(nd[i].data.isBorder && rho_b[ci] < nd[i].data.rho)
       rho_b[ci] = nd[i].data.rho;
   }
 
-  //flag points in cluster with density < rho_b as halo points, then fill the cluster vector 
+  //flag points in cluster with density < rho_b as halo points, then fill the cluster vector
   for(unsigned int i = 0; i < nd.size(); ++i){
     int ci = nd[i].data.clusterIndex;
     if(ci!=-1 && nd[i].data.rho < rho_b[ci])
       nd[i].data.isHalo = true;
-    if(nd[i].data.clusterIndex!=-1){ 
+    if(nd[i].data.clusterIndex!=-1){
       current_v[ci+cluster_offset].push_back(nd[i]);
       if (verbosity < pINFO)
-	{ 
+	{
 	  std::cout << "Pushing hit " << i << " into cluster with index " << ci+cluster_offset << std::endl;
 	  std::cout << "Size now " << current_v[ci+cluster_offset].size() << std::endl;
 	}
@@ -344,7 +386,7 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
 
   //prepare the offset for the next layer if there is one
   if (verbosity < pINFO)
-    { 
+    {
       std::cout << "moving cluster offset by " << clusterIndex << std::endl;
     }
   cluster_offset += clusterIndex;
@@ -355,8 +397,9 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
 std::vector<unsigned> HGCalImagingAlgo::findLocalMaximaInCluster(const std::vector<KDNode>& cluster) {
   std::vector<unsigned> result;
   std::vector<bool> seed(cluster.size(),true);
- 
-  for( unsigned i = 0; i < cluster.size(); ++i ) {    
+  float delta_c = 2.;
+
+  for( unsigned i = 0; i < cluster.size(); ++i ) {
     for( unsigned j = 0; j < cluster.size(); ++j ) {
       if( distance(cluster[i].data,cluster[j].data) < delta_c && i != j) {
 	//std::cout << "hit-to-hit distance = " << distance(cluster[i],cluster[j]) << std::endl;
@@ -381,7 +424,7 @@ std::vector<unsigned> HGCalImagingAlgo::findLocalMaximaInCluster(const std::vect
 }
 
 math::XYZPoint HGCalImagingAlgo::calculatePositionWithFraction(const std::vector<KDNode>& hits,
-								 const std::vector<double>& fractions) {  
+								 const std::vector<double>& fractions) {
   double norm(0.0), x(0.0), y(0.0), z(0.0);
   for( unsigned i = 0; i < hits.size(); ++i ) {
     const double weight = fractions[i]*hits[i].data.weight;
@@ -406,7 +449,7 @@ double HGCalImagingAlgo::calculateEnergyWithFraction(const std::vector<KDNode>& 
 }
 
 void HGCalImagingAlgo::shareEnergy(const std::vector<KDNode>& incluster,
-				   const std::vector<unsigned>& seeds, 
+				   const std::vector<unsigned>& seeds,
 				   std::vector<std::vector<double> >& outclusters) {
   std::vector<bool> isaseed(incluster.size(),false);
   outclusters.clear();
@@ -416,7 +459,7 @@ void HGCalImagingAlgo::shareEnergy(const std::vector<KDNode>& incluster,
 
   if( seeds.size() == 1 ) { // short circuit the case of a lone cluster
     outclusters[0].clear();
-    outclusters[0].resize(incluster.size(),1.0);    
+    outclusters[0].resize(incluster.size(),1.0);
     return;
   }
 
@@ -439,8 +482,8 @@ void HGCalImagingAlgo::shareEnergy(const std::vector<KDNode>& incluster,
       if( j == seeds[i] ) {
 	outclusters[i][j] = 1.0;
 	centroids[i] = math::XYZPoint(incluster[j].data.x,incluster[j].data.y,incluster[j].data.z);
-	energies[i]  = incluster[j].data.weight; 
-      } 
+	energies[i]  = incluster[j].data.weight;
+      }
     }
   }
 
@@ -457,14 +500,14 @@ void HGCalImagingAlgo::shareEnergy(const std::vector<KDNode>& incluster,
   const double toleranceScaling = std::pow(std::max(1.0,seeds.size()-1.0),2.0);
   std::vector<Point> prevCentroids;
   std::vector<double> frac(seeds.size()), dist2(seeds.size());
-  while( iter++ < iterMax && diff > stoppingTolerance*toleranceScaling ) {    
+  while( iter++ < iterMax && diff > stoppingTolerance*toleranceScaling ) {
     for( unsigned i = 0; i < incluster.size(); ++i ) {
       const Hexel& ihit = incluster[i].data;
       double fraction(0.0), fracTot(0.0), d2(0.0);
       for( unsigned j = 0; j < seeds.size(); ++j ) {
 	fraction = 0.0;
-	d2 = ( std::pow(ihit.x - centroids[j].x(),2.0) + 
-	       std::pow(ihit.y - centroids[j].y(),2.0) + 
+	d2 = ( std::pow(ihit.x - centroids[j].x(),2.0) +
+	       std::pow(ihit.y - centroids[j].y(),2.0) +
 	       std::pow(ihit.z - centroids[j].z(),2.0)   )/sigma2;
 	dist2[j] = d2;
 	// now we set the fractions up based on hit type
@@ -472,24 +515,24 @@ void HGCalImagingAlgo::shareEnergy(const std::vector<KDNode>& incluster,
 	  fraction = 1.0;
 	} else if( isaseed[i] ) {
 	  fraction = 0.0;
-	} else {	  
+	} else {
 	  fraction = energies[j]*std::exp( -0.5*d2 );
 	}
-	fracTot += fraction;	
+	fracTot += fraction;
 	frac[j] = fraction;
       }
       // now that we have calculated all fractions for all hits
       // assign the new fractions
       for( unsigned j = 0; j < seeds.size(); ++j ) {
-	if( fracTot > minFracTot || 
+	if( fracTot > minFracTot ||
 	    ( i == seeds[j] && fracTot > 0.0 ) ) {
 	  outclusters[j][i] = frac[j]/fracTot;
 	} else {
 	  outclusters[j][i] = 0.0;
-	}	
+	}
       }
     }
-    
+
     // save previous centroids
     prevCentroids = std::move(centroids);
     // finally update the position of the centroids from the last iteration
@@ -505,5 +548,5 @@ void HGCalImagingAlgo::shareEnergy(const std::vector<KDNode>& incluster,
     //update convergance parameter outside loop
     diff = std::sqrt(diff2);
     //std::cout << " iteration = " << iter << " diff = " << diff << std::endl;
-  } 
+  }
 }

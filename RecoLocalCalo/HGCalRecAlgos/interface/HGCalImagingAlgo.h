@@ -27,53 +27,91 @@
 
 template <typename T>
 std::vector<size_t> sorted_indices(const std::vector<T> &v) {
-  
+
   // initialize original index locations
   std::vector<size_t> idx(v.size());
   for (size_t i = 0; i != idx.size(); ++i) idx[i] = i;
-  
+
   // sort indices based on comparing values in v
   std::sort(idx.begin(), idx.end(),
             [&v](size_t i1, size_t i2) {return v[i1] > v[i2];});
-  
-  return idx;
-} 
 
-class HGCalImagingAlgo 
+  return idx;
+}
+
+class HGCalImagingAlgo
 {
 
-  
+
  public:
-  
-  enum VerbosityLevel { pDEBUG = 0, pWARNING = 1, pINFO = 2, pERROR = 3 }; 
-  
- HGCalImagingAlgo() : delta_c(0.), kappa(1.), ecut(0.), cluster_offset(0),
+
+  enum VerbosityLevel { pDEBUG = 0, pWARNING = 1, pINFO = 2, pERROR = 3 };
+
+ HGCalImagingAlgo() : vecDeltas(), kappa(1.), ecut(0.), cluster_offset(0),
 		      sigma2(1.0),
 		      algoId(reco::CaloCluster::undefined),
 		      verbosity(pERROR){
  }
-  
-  HGCalImagingAlgo(float delta_c_in, double kappa_in, double ecut_in,
+
+  HGCalImagingAlgo(std::vector<double> vecDeltas_in, double kappa_in, double ecut_in,
 		   //		   const CaloSubdetectorTopology *thetopology_p,
 		   reco::CaloCluster::AlgoId algoId_in,
-		   VerbosityLevel the_verbosity = pERROR) : delta_c(delta_c_in), kappa(kappa_in), 
-							    ecut(ecut_in),    
+                   bool dependSensor_in,
+                   std::vector<double> dEdXweights_in,
+                   std::vector<double> thicknessCorrection_in,
+                   std::vector<double> fcPerMip_in,
+                   double fcPerEle_in,
+                   std::vector<double> nonAgedNoises_in,
+                   double noiseMip_in,
+		   VerbosityLevel the_verbosity = pERROR) : vecDeltas(vecDeltas_in), kappa(kappa_in),
+							    ecut(ecut_in),
 							    cluster_offset(0),
 							    sigma2(1.0),
 							    algoId(algoId_in),
-							    verbosity(the_verbosity){
+                                                            dependSensor(dependSensor_in),
+							    dEdXweights(dEdXweights_in),
+                                                            thicknessCorrection(thicknessCorrection_in),
+                                                            fcPerMip(fcPerMip_in),
+                                                            fcPerEle(fcPerEle_in),
+                                                            nonAgedNoises(nonAgedNoises_in),
+                                                            noiseMip(noiseMip_in),
+							    verbosity(the_verbosity),
+							    points(2*(maxlayer+1)),
+							    minpos(2*(maxlayer+1),{ {0.0f,0.0f} }),
+							    maxpos(2*(maxlayer+1),{ {0.0f,0.0f} }),
+							    zees(2*(maxlayer+1),0.)
+  {
   }
-  
-  HGCalImagingAlgo(float delta_c_in, double kappa_in, double ecut_in,
-		   double showerSigma, 
+
+  HGCalImagingAlgo(std::vector<double> vecDeltas_in, double kappa_in, double ecut_in,
+		   double showerSigma,
 		   //		   const CaloSubdetectorTopology *thetopology_p,
 		   reco::CaloCluster::AlgoId algoId_in,
-		   VerbosityLevel the_verbosity = pERROR) : delta_c(delta_c_in), kappa(kappa_in), 
-							    ecut(ecut_in),    
+                   bool dependSensor_in,
+                   std::vector<double> dEdXweights_in,
+                   std::vector<double> thicknessCorrection_in,
+                   std::vector<double> fcPerMip_in,
+                   double fcPerEle_in,
+                   std::vector<double> nonAgedNoises_in,
+                   double noiseMip_in,
+		   VerbosityLevel the_verbosity = pERROR) : vecDeltas(vecDeltas_in), kappa(kappa_in),
+							    ecut(ecut_in),
 							    cluster_offset(0),
 							    sigma2(std::pow(showerSigma,2.0)),
 							    algoId(algoId_in),
-							    verbosity(the_verbosity){
+                                                            dependSensor(dependSensor_in),
+							    dEdXweights(dEdXweights_in),
+                                                            thicknessCorrection(thicknessCorrection_in),
+                                                            fcPerMip(fcPerMip_in),
+                                                            fcPerEle(fcPerEle_in),
+                                                            nonAgedNoises(nonAgedNoises_in),
+                                                            noiseMip(noiseMip_in),
+							    verbosity(the_verbosity),
+							    points(2*(maxlayer+1)),
+							    minpos(2*(maxlayer+1),{ {0.0f,0.0f} }),
+							    maxpos(2*(maxlayer+1),{ {0.0f,0.0f} }),
+							    zees(2*(maxlayer+1),0.)
+  {
   }
 
   virtual ~HGCalImagingAlgo()
@@ -85,10 +123,11 @@ class HGCalImagingAlgo
       verbosity = the_verbosity;
     }
 
-  // this is the method that will start the clusterisation (it is possible to invoke this method more than once - but make sure it is with 
+  void populate(const HGCRecHitCollection &hits);
+  // this is the method that will start the clusterisation (it is possible to invoke this method more than once - but make sure it is with
   // different hit collections (or else use reset)
-  void makeClusters(const HGCRecHitCollection &hits);
-  // this is the method to get the cluster collection out 
+  void makeClusters();
+  // this is the method to get the cluster collection out
   std::vector<reco::BasicCluster> getClusters(bool);
   // needed to switch between EE and HE with the same algorithm object (to get a single cluster collection)
   void getEventSetup(const edm::EventSetup& es){ rhtools_.getEventSetup(es); }
@@ -97,17 +136,28 @@ class HGCalImagingAlgo
     current_v.clear();
     clusters_v.clear();
     cluster_offset = 0;
+    for( std::vector< std::vector<KDNode> >::iterator it = points.begin(); it != points.end(); it++)
+      {
+        // for( std::vector<KDNode>::iterator jt = it->begin(); jt != it->end(); jt++)
+        //   delete jt->data;
+        it->clear();
+      }
+    for(unsigned int i = 0; i < minpos.size(); i++)
+      {
+	minpos[i][0]=0.;minpos[i][1]=0.;
+	maxpos[i][0]=0.;maxpos[i][1]=0.;
+      }
   }
   /// point in the space
   typedef math::XYZPoint Point;
 
- private: 
-  
+ private:
+
   //max number of layers
   static const unsigned int maxlayer = 52;
 
   // The two parameters used to identify clusters
-  float delta_c;
+  std::vector<double> vecDeltas;
   double kappa;
 
   // The hit energy cutoff
@@ -127,10 +177,19 @@ class HGCalImagingAlgo
   // The algo id
   reco::CaloCluster::AlgoId algoId;
 
+  // various parameters used for calculating the noise levels for a given sensor (and whether to use them)
+  bool dependSensor;
+  std::vector<double> dEdXweights;
+  std::vector<double> thicknessCorrection;
+  std::vector<double> fcPerMip;
+  double fcPerEle;
+  std::vector<double> nonAgedNoises;
+  double noiseMip;
+
   // The verbosity level
   VerbosityLevel verbosity;
 
-  
+
   struct Hexel {
 
     double x;
@@ -146,33 +205,38 @@ class HGCalImagingAlgo
     bool isBorder;
     bool isHalo;
     int clusterIndex;
+    float sigmaNoise;
+    float thickness;
     const hgcal::RecHitTools *tools;
 
-  Hexel(const HGCRecHit &hit, DetId id_in, bool isHalf, const hgcal::RecHitTools *tools_in) : 
+  Hexel(const HGCRecHit &hit, DetId id_in, bool isHalf, float sigmaNoise_in, float thickness_in, const hgcal::RecHitTools *tools_in) :
       x(0.),y(0.),z(0.),isHalfCell(isHalf),
       weight(0.), fraction(1.0), detid(id_in), rho(0.), delta(0.),
-      nearestHigher(-1), isBorder(false), isHalo(false), 
-      clusterIndex(-1), tools(tools_in)
+      nearestHigher(-1), isBorder(false), isHalo(false),
+	clusterIndex(-1), sigmaNoise(sigmaNoise_in), thickness(thickness_in),
+	tools(tools_in)
     {
       const GlobalPoint position( std::move( tools->getPosition( detid ) ) );
-      
+
       weight = hit.energy();
       x = position.x();
       y = position.y();
       z = position.z();
-      
+
     }
-    Hexel() : 
+    Hexel() :
       x(0.),y(0.),z(0.),isHalfCell(false),
       weight(0.), fraction(1.0), detid(), rho(0.), delta(0.),
-      nearestHigher(-1), isBorder(false), isHalo(false), 
+      nearestHigher(-1), isBorder(false), isHalo(false),
       clusterIndex(-1),
+      sigmaNoise(0.),
+      thickness(0.),
       tools(0)
     {}
-    bool operator > (const Hexel& rhs) const { 
-      return (rho > rhs.rho); 
+    bool operator > (const Hexel& rhs) const {
+      return (rho > rhs.rho);
     }
-    
+
   };
 
   typedef KDTreeLinkerAlgo<Hexel,2> KDTree;
@@ -190,8 +254,13 @@ class HGCalImagingAlgo
     return idx;
   }
 
-  std::vector<std::vector<Hexel> > points; //a vector of vectors of hexels, one for each layer
+  std::vector<std::vector<KDNode> > points; //a vector of vectors of hexels, one for each layer
   //@@EM todo: the number of layers should be obtained programmatically - the range is 1-n instead of 0-n-1...
+
+  std::vector<std::array<float,2> > minpos;
+  std::vector<std::array<float,2> > maxpos;
+  std::vector<float> zees;
+
 
   //these functions should be in a helper class.
   inline double distance2(const Hexel &pt1, const Hexel &pt2) { //distance squared
@@ -201,10 +270,10 @@ class HGCalImagingAlgo
   } //distance squaredq
   inline double distance(const Hexel &pt1, const Hexel &pt2) { //2-d distance on the layer (x-y)
     return std::sqrt(distance2(pt1,pt2));
-  } 
-  double calculateLocalDensity(std::vector<KDNode> &, KDTree &); //return max density
+  }
+  double calculateLocalDensity(std::vector<KDNode> &, KDTree &, const int); //return max density
   double calculateDistanceToHigher(std::vector<KDNode> &, KDTree &);
-  int findAndAssignClusters(std::vector<KDNode> &, KDTree &, double, KDTreeBox &);
+  int findAndAssignClusters(std::vector<KDNode> &, KDTree &, double, KDTreeBox &, const int);
   math::XYZPoint calculatePosition(std::vector<KDNode> &);
 
   // attempt to find subclusters within a given set of hexels
@@ -212,7 +281,7 @@ class HGCalImagingAlgo
   math::XYZPoint calculatePositionWithFraction(const std::vector<KDNode>&, const std::vector<double>&);
   double calculateEnergyWithFraction(const std::vector<KDNode>&, const std::vector<double>&);
   // outputs
-  void shareEnergy(const std::vector<KDNode>&, 
+  void shareEnergy(const std::vector<KDNode>&,
 		   const std::vector<unsigned>&,
 		   std::vector<std::vector<double> >&);
  };
