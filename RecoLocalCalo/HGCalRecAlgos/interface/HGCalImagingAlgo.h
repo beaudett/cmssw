@@ -224,6 +224,7 @@ struct Hexel {
         bool isBorder;
         bool isHalo;
         int clusterIndex;
+        bool passesQuality;
         float sigmaNoise;
         float thickness;
         const hgcal::RecHitTools *tools;
@@ -232,7 +233,7 @@ struct Hexel {
                 isHalfCell(isHalf),
                 weight(0.), fraction(1.0), detid(id_in), rho(0.), delta(0.),
                 nearestHigher(-1), isBorder(false), isHalo(false),
-                clusterIndex(-1), sigmaNoise(sigmaNoise_in), thickness(thickness_in),
+		  clusterIndex(-1), passesQuality(false), sigmaNoise(sigmaNoise_in), thickness(thickness_in),
                 tools(tools_in)
         {
                 const GlobalPoint position( std::move( tools->getPosition( detid ) ) );
@@ -246,6 +247,7 @@ struct Hexel {
                 weight(0.), fraction(1.0), detid(), rho(0.), delta(0.),
                 nearestHigher(-1), isBorder(false), isHalo(false),
                 clusterIndex(-1),
+          	passesQuality(false),
                 sigmaNoise(0.),
                 thickness(0.),
                 tools(0)

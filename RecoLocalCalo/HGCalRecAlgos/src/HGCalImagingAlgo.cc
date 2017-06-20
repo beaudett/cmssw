@@ -278,12 +278,19 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
   std::vector<size_t> ds = sort_by_delta(nd); // sort in decreasing distance to higher
 
   const unsigned int nd_size = nd.size();
-  for(unsigned int i=0; i < nd_size; ++i){
+
+  if(nd_size) {
+    // always keep the highest rho cluster - its flags will be set later
+    nd[ds[0]].data.clusterIndex=clusterIndex;    // clusterIndex=0
+  }
+
+  for(unsigned int i=1; i < nd_size; ++i){
 
     if(nd[ds[i]].data.delta < delta_c) break; // no more cluster centers to be looked at
-    if(dependSensor){
+    if(dependSensor  || nd[ds[i]].data.clusterIndex !=-1 ){
 
       float rho_c = kappa*nd[ds[i]].data.sigmaNoise;
+      nd[ds[i]].data.passesQuality = nd[ds[i]].data.rho > rho_c ;
       if(nd[ds[i]].data.rho < rho_c ) continue; // set equal to kappa times noise threshold
 
     }
@@ -368,7 +375,7 @@ int HGCalImagingAlgo::findAndAssignClusters(std::vector<KDNode> &nd,KDTree &lp, 
     int ci = nd[i].data.clusterIndex;
     if(ci!=-1 && nd[i].data.rho <= rho_b[ci])
       nd[i].data.isHalo = true;
-    if(nd[i].data.clusterIndex!=-1){
+    if(nd[i].data.clusterIndex!=-1  && nd[i].data.passesQuality ){
       current_v[ci+cluster_offset].push_back(nd[i]);
       if (verbosity < pINFO)
 	  {
