@@ -59,19 +59,23 @@ void RecHitTools::getEvent(const edm::Event& ev) {
 }
 
 void RecHitTools::getEventSetup(const edm::EventSetup& es) {
+    edm::ESHandle<CaloGeometry> geom;
+    // check if the geometry has changed
+    if (cacheIDGeom_ == es.get<CaloGeometryRecord>().cacheIdentifier()) {
+        return;
+    }
+    // the geometry has changed (or not been initalized) , (re-)load it
+    cacheIDGeom_=es.get<CaloGeometryRecord>().cacheIdentifier();
+    es.get<CaloGeometryRecord>().get(geom);
 
-  edm::ESHandle<CaloGeometry> geom;
-  es.get<CaloGeometryRecord>().get(geom);
-
-  geom_ = geom.product();
-  auto geomEE = static_cast<const HGCalGeometry*>(geom_->getSubdetectorGeometry(DetId::Forward,ForwardSubdetector::HGCEE));
-  fhOffset_ = (geomEE->topology().dddConstants()).layers(true);
-  unsigned int wmaxEE = 1 + (geomEE->topology().dddConstants()).waferMax();
-  auto geomFH = static_cast<const HGCalGeometry*>(geom_->getSubdetectorGeometry(DetId::Forward,ForwardSubdetector::HGCHEF));
-  bhOffset_ = fhOffset_ + (geomFH->topology().dddConstants()).layers(true);
-  unsigned int wmaxFH = 1 + (geomFH->topology().dddConstants()).waferMax();
-  maxNumberOfWafersPerLayer_ = std::max(wmaxEE,wmaxFH);
-
+    geom_ = geom.product();
+    auto geomEE = static_cast<const HGCalGeometry*>(geom_->getSubdetectorGeometry(DetId::Forward,ForwardSubdetector::HGCEE));
+    fhOffset_ = (geomEE->topology().dddConstants()).layers(true);
+    unsigned int wmaxEE = 1 + (geomEE->topology().dddConstants()).waferMax();
+    auto geomFH = static_cast<const HGCalGeometry*>(geom_->getSubdetectorGeometry(DetId::Forward,ForwardSubdetector::HGCHEF));
+    bhOffset_ = fhOffset_ + (geomFH->topology().dddConstants()).layers(true);
+    unsigned int wmaxFH = 1 + (geomFH->topology().dddConstants()).waferMax();
+    maxNumberOfWafersPerLayer_ = std::max(wmaxEE,wmaxFH);
 }
 
 GlobalPoint RecHitTools::getPosition(const DetId& id) const {
